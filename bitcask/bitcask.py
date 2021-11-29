@@ -39,26 +39,17 @@ class BitCask():
         to write to).)
         """
 
-        # TODO: set up like a file_number attribute, then build the current_file name off of that
-        # that way, we can simply increment it when we need to change files.
-        # this will also require me to regex for existing file patterns
-
+        # init configuration
         self._hash_table_size = hash_table_size
         self.writable = write
-
-        # for determining key size and byte IO
         self.byteorder = sys.byteorder
-
-        # NOTE: for simplicity, I'll always assume these values even when
-        # reading from an existing data dir.
+        self.inactive_segments = []
         self._FILE_SEG_ID_PREFIX = "segment_"
         self._FILE_SEG_ID_DIGITS = 7
         self._FILE_SEG_PATTERN = '^' + self._FILE_SEG_ID_PREFIX + '[0-9]{' + str(self._FILE_SEG_ID_DIGITS) + '}$'
         self._FILE_SEG_BYTE_THRESHOLD = 2 ** 20
         self._KEYSIZE_BYTES = 2
         self._VALUESIZE_BYTES = 3
-
-        self.inactive_segments = []
 
         # determine the data directory path for this instance of bitcask
         if not directory_path:
@@ -69,38 +60,36 @@ class BitCask():
         except FileExistsError:
             print("Directory already exists, will search for segment files in existing data directory...")
 
-        # identify the current active segment file where new writes will take place
-        # existing_data_files = [f for f in os.listdir(self.directory_path) if f.startswith(self._FILE_SEG_ID_PREFIX)]
+        # identify and set the current file
         existing_data_files = [f for f in os.listdir(self.directory_path) if re.search(self._FILE_SEG_PATTERN, f)]
         if existing_data_files:
             self.current_file = max(existing_data_files)
-            self.current_file_number = self.current_file # TODO: BOOKMARK, I was right here, setting up file_numbers for easier addition.
-            # TODO: I should also probably have a private method for formatting the current_file_number to string with leading zeros
         else:
             self.current_file = self._filename_format(0)
             print("No segment files existed, starting from segment file zero...")
             with open(self.current_file_fullpath, 'wb') as f:
                 f.write(b'')
-            self.current_file_number = 0
 
         # initialize the keydir (in-memory hashed key structure)
-        # This will be a list of dicts where each dict contains file_id, value_size, value_pos, timestamp
         self.key_table_size = hash_table_size
         self.keydir = [-1] * self.key_table_size
 
 
-    # reminds me of a view in SQL RDBMS. Looks like an object property, 
-    # but it's really a wrapper around some logic that executes
     @property
     def current_file_fullpath(self):
+        """
+        Dynamically build the full path to current file.
+        """
         return self.directory_path + '/' + self.current_file
 
 
-    def _lpad_zeros(self, segment_number: int) -> str:
-        return "{:0" + str(self._FILE_SEG_ID_DIGITS) + "d}".format(segment_number)
-
-    def _filename_format(self, segment_number: int):
-        return (self._FILE_SEG_ID_PREFIX + ("{:0" + str(self._FILE_SEG_ID_DIGITS) + "d}").format(segment_number))
+    @property
+    def current_file_number(self) -> int:
+        """
+        Retrieve the int value associated with the current file.
+        Example: for self.current_file of "segment_0000021" -> 21
+        """
+        return int(re.search("[0-9]{" + str(self._FILE_SEG_ID_DIGITS) + "}$", self.current_file).group(0))
 
 
     def put(self, key: bytes, value: bytes) -> None:
@@ -144,7 +133,7 @@ class BitCask():
         
         # update in-memory keydir
         key_dict = {
-            'file_id': self.current_file,
+            'file_id': self.current_file_fullpath,
             'value_size': len(value),
             'value_position': value_position,
             'timestampe': _ts
@@ -157,8 +146,6 @@ class BitCask():
             self._change_active_file()
         return
 
-    def _change_active_file(self):
-        pass
 
     def get(self, key: bytes) -> bytes:
         """
@@ -173,12 +160,40 @@ class BitCask():
 
 
         key_dir_record = self.keydir[self._hashmod_this_key(key)]
-        with open(self.directory_path + '/' + key_dir_record['file_id'], 'rb') as f:
+        with open(key_dir_record['file_id'], 'rb') as f:
 
             f.seek(key_dir_record['value_position'])
             value = f.read(key_dir_record['value_size'])
         
         return value
+
+
+    def _change_active_file(self):
+        """
+        Calling this method will deactivate the current file and create a new
+        current/active file. These are executed as side effects.
+        """
+        
+        # append current full file path to inactive segments
+        self.inactive_segments.append(self.current_file_fullpath)
+
+        # set the new current file, if we're maxed out, return back to zero
+        if self.current_file_number == int("9" * self._FILE_SEG_ID_DIGITS):
+            self.current_file = self._filename_format(0)
+        else:
+            self.current_file = self._filename_format(self.current_file_number + 1)
+        
+        # get the file started
+        with open(self.current_file_fullpath, 'ab') as f:
+            f.write(b'')
+
+
+    def _filename_format(self, segment_number: int) -> str:
+        """
+        Given a segment_number as an int, this method returns the formatted file name.
+        Example: for the value 42, this function would return "segment_0000042" 
+        """
+        return (self._FILE_SEG_ID_PREFIX + ("{:0" + str(self._FILE_SEG_ID_DIGITS) + "d}").format(segment_number))
 
 
     def _get_num_bytes_of_int(self, this_int: int) -> int:
@@ -209,5 +224,4 @@ if __name__ == "__main__":
     bc.put(b'nelson', b'has a new message for me!')
     print(bc.get(b'nelson'))
     print(bc.get(b'taylor'))
-
 
