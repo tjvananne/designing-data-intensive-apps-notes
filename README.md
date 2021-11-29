@@ -3,6 +3,9 @@ These are my personal notes and code snippets related to me reading through the 
 
 
 * [Log-based Hash Index](hash_index/README.md)
-* [Log-based Hash Index (round two after reading BitCask white paper)](hash_index2/README.md)
+    - no compaction, really hacky things going on here like reading until a newline, plenty to not like about this attempt which I'm going to try and clean up with an implementation of BitCask next.
+* [Attempting a BitCask implementation after reading white paper](bitcask/README.md)
+
+
 
 
